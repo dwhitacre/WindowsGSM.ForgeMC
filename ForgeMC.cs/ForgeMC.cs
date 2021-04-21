@@ -307,6 +307,7 @@ namespace WindowsGSM.Plugins
         // - Check if the directory contains forge.jar for import
         public bool IsImportValid(string path)
         {
+            // @todo(dw): dont require users to rename forge-{MC Version}-{Forge Version}.jar to forge.jar
             // Check forge.jar exists
             var exePath = Path.Combine(path, StartPath);
             Error = $"Invalid Path! Fail to find {StartPath}";
