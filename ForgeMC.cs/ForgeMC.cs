@@ -19,7 +19,7 @@ namespace WindowsGSM.Plugins
             name = "WindowsGSM.ForgeMC", // WindowsGSM.XXXX
             author = "dwhitacre",
             description = "🧩 WindowsGSM plugin for supporting Minecraft: Forge Server",
-            version = "0.1",
+            version = "0.2",
             url = "https://github.com/dwhitacre/WindowsGSM.ForgeMC", // Github repository link (Best practice)
             color = "#ffffff" // Color Hex
         };
