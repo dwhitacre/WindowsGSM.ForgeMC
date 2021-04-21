@@ -5,7 +5,6 @@ using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using System.Windows;
 using WindowsGSM.Functions;
 using WindowsGSM.GameServer.Query;
 using Newtonsoft.Json.Linq;
@@ -20,7 +19,7 @@ namespace WindowsGSM.Plugins
             name = "WindowsGSM.ForgeMC", // WindowsGSM.XXXX
             author = "dwhitacre",
             description = "🧩 WindowsGSM plugin for supporting Minecraft: Forge Server",
-            version = "1.0",
+            version = "0.1",
             url = "https://github.com/dwhitacre/WindowsGSM.ForgeMC", // Github repository link (Best practice)
             color = "#ffffff" // Color Hex
         };
