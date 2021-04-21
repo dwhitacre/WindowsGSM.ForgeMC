@@ -5,35 +5,36 @@ using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Windows;
 using WindowsGSM.Functions;
 using WindowsGSM.GameServer.Query;
 using Newtonsoft.Json.Linq;
 
 namespace WindowsGSM.Plugins
 {
-    public class PaperMC
+    public class ForgeMC
     {
         // - Plugin Details
         public Plugin Plugin = new Plugin
         {
-            name = "WindowsGSM.PaperMC", // WindowsGSM.XXXX
-            author = "BattlefieldDuck",
-            description = "🧩 WindowsGSM plugin for supporting Minecraft: Paper Server",
+            name = "WindowsGSM.ForgeMC", // WindowsGSM.XXXX
+            author = "dwhitacre",
+            description = "🧩 WindowsGSM plugin for supporting Minecraft: Forge Server",
             version = "1.0",
-            url = "https://github.com/BattlefieldDuck/WindowsGSM.PaperMC", // Github repository link (Best practice)
+            url = "https://github.com/dwhitacre/WindowsGSM.ForgeMC", // Github repository link (Best practice)
             color = "#ffffff" // Color Hex
         };
 
 
         // - Standard Constructor and properties
-        public PaperMC(ServerConfig serverData) => _serverData = serverData;
+        public ForgeMC(ServerConfig serverData) => _serverData = serverData;
         private readonly ServerConfig _serverData;
         public string Error, Notice;
 
 
         // - Game server Fixed variables
-        public string StartPath => "paper.jar"; // Game server start path
-        public string FullName = "Minecraft: Paper Server"; // Game server FullName
+        public string StartPath => "forge.jar"; // Game server start path
+        public string FullName = "Minecraft: Forge Server"; // Game server FullName
         public bool AllowsEmbedConsole = true;  // Does this server support output redirect?
         public int PortIncrements = 1; // This tells WindowsGSM how many ports should skip after installation
         public object QueryMethod = new UT3(); // Query method should be use on current server type. Accepted value: null or new A2S() or new FIVEM() or new UT3()
@@ -172,15 +173,17 @@ namespace WindowsGSM.Plugins
             }
 
             // Try getting the latest version and build
-            var build = await GetRemoteBuild(); // "1.16.1/133"
+            var build = await GetRemoteBuild();
             if (string.IsNullOrWhiteSpace(build)) { return null; }
 
-            // Download the latest paper.jar to /serverfiles
+            // Download the latest forge installer to /serverfiles
+            var installer = $"forge-{build}-installer.jar";
+            var installerFile = ServerPath.GetServersServerFiles(_serverData.ServerID, installer);
             try
             {
                 using (var webClient = new WebClient())
                 {
-                    await webClient.DownloadFileTaskAsync($"https://papermc.io/api/v1/paper/{build}/download", ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath));
+                    await webClient.DownloadFileTaskAsync($"http://files.minecraftforge.net/maven/net/minecraftforge/forge/{build}/{installer}", installerFile);
                 }
             }
             catch (Exception e)
@@ -193,6 +196,56 @@ namespace WindowsGSM.Plugins
             var eulaFile = ServerPath.GetServersServerFiles(_serverData.ServerID, "eula.txt");
             File.WriteAllText(eulaFile, "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://account.mojang.com/documents/minecraft_eula).\neula=true");
 
+            // Prepare install parameter
+            var param = new StringBuilder($"-jar {installer} --installServer");
+
+            // Get java, this should always be installed
+            var javaPath = JavaHelper.FindJavaExecutableAbsolutePath();
+            if (javaPath.Length == 0)
+            {
+                Error = "Java is not installed";
+                return null;
+            }
+
+            // Prepare install process
+            // @todo(dw): configure this to log to install log rather than opening a separate window??
+            var p = new Process
+            {
+                StartInfo =
+                {
+                    WorkingDirectory = ServerPath.GetServersServerFiles(_serverData.ServerID),
+                    FileName = javaPath,
+                    Arguments = param.ToString(),
+                    WindowStyle = ProcessWindowStyle.Minimized,
+                    UseShellExecute = false
+                },
+                EnableRaisingEvents = true
+            };
+
+            // Start install process
+            try
+            {
+                p.Start();
+                p.WaitForExit();
+            }
+            catch (Exception e)
+            {
+                Error = e.Message;
+                return null;
+            }
+
+            // Copy the installed jar to a static filename
+            try
+            {
+                File.Copy(ServerPath.GetServersServerFiles(_serverData.ServerID, $"forge-{build}.jar"), ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath));
+            }
+            catch (Exception e)
+            {
+                Error = e.Message;
+                return null;
+            }
+
+            // We should be installed now!
             return null;
         }
 
@@ -200,15 +253,15 @@ namespace WindowsGSM.Plugins
         // - Update server function
         public async Task<Process> Update()
         {
-            // Delete the old paper.jar
-            var paperJar = ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath);
-            if (File.Exists(paperJar))
+            // Delete the old forge.jar
+            var forgeJar = ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath);
+            if (File.Exists(forgeJar))
             {
                 if (await Task.Run(() =>
                 {
                     try
                     {
-                        File.Delete(paperJar);
+                        File.Delete(forgeJar);
                         return true;
                     }
                     catch (Exception e)
@@ -226,7 +279,7 @@ namespace WindowsGSM.Plugins
             var build = await GetRemoteBuild(); // "1.16.1/133"
             if (string.IsNullOrWhiteSpace(build)) { return null; }
 
-            // Download the latest paper.jar to /serverfiles
+            // Download the latest forge.jar to /serverfiles
             try
             {
                 using (var webClient = new WebClient())
@@ -247,15 +300,15 @@ namespace WindowsGSM.Plugins
         // - Check if the installation is successful
         public bool IsInstallValid()
         {
-            // Check paper.jar exists
+            // Check forge.jar exists
             return File.Exists(ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath));
         }
 
 
-        // - Check if the directory contains paper.jar for import
+        // - Check if the directory contains forge.jar for import
         public bool IsImportValid(string path)
         {
-            // Check paper.jar exists
+            // Check forge.jar exists
             var exePath = Path.Combine(path, StartPath);
             Error = $"Invalid Path! Fail to find {StartPath}";
             return File.Exists(exePath);
@@ -287,19 +340,31 @@ namespace WindowsGSM.Plugins
         // - Get Latest server version
         public async Task<string> GetRemoteBuild()
         {
-            // Get latest version and build at https://papermc.io/api/v1/paper
+            // @todo(dw): its likely we will not always want the latest
+            // version of Forge AND the latest version of Minecraft.
+            // however, other MC plugins make this same assumption, so
+            // fine for now
+            //
+            // alternatively if sticking with always latest..
+            // get it from here: https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml
             try
             {
                 using (var webClient = new WebClient())
                 {
-                    var version = JObject.Parse(await webClient.DownloadStringTaskAsync("https://papermc.io/api/v1/paper"))["versions"][0].ToString(); // "1.16.1"
-                    var build = JObject.Parse(await webClient.DownloadStringTaskAsync($"https://papermc.io/api/v1/paper/{version}"))["builds"]["latest"].ToString(); // "133"
-                    return $"{version}/{build}";
+                    // @todo(dw): dont get minecraft versions from Paper's API.
+                    // this probably is the latest version of MC Paper supports
+                    // which is not equal to latest version of MC Forge supports
+                    var version = JObject.Parse(await webClient.DownloadStringTaskAsync("https://papermc.io/api/v1/paper"))["versions"][0].ToString();
+                    
+                    // @todo(dw): need to allow choice between 'latest' stream and 'recommended' stream
+                    var build = JObject.Parse(await webClient.DownloadStringTaskAsync("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"))["promos"][$"{version}-latest"].ToString();
+
+                    return $"{version}-{build}";
                 }
             }
             catch
             {
-                Error = "Fail to get remote version and build";
+                Error = "Failed to get remote version and build";
                 return string.Empty;
             }
         }
