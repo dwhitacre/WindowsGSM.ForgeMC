@@ -19,7 +19,7 @@ namespace WindowsGSM.Plugins
             name = "WindowsGSM.ForgeMC", // WindowsGSM.XXXX
             author = "dwhitacre",
             description = "🧩 WindowsGSM plugin for supporting Minecraft: Forge Server",
-            version = "0.2",
+            version = "0.3",
             url = "https://github.com/dwhitacre/WindowsGSM.ForgeMC", // Github repository link (Best practice)
             color = "#ffffff" // Color Hex
         };
@@ -73,7 +73,8 @@ namespace WindowsGSM.Plugins
             }
 
             // Prepare start parameter
-            var param = new StringBuilder($"{_serverData.ServerParam} -jar {StartPath} nogui");
+            var jarFile = GetForgeFilename(ServerPath.GetServersServerFiles(_serverData.ServerID));
+            var param = new StringBuilder($"{_serverData.ServerParam} -jar {jarFile} nogui");
 
             // Prepare Process
             var p = new Process
@@ -156,7 +157,7 @@ namespace WindowsGSM.Plugins
             var agreedPrompt = await UI.CreateYesNoPromptV1("Agreement to the EULA", "By continuing you are indicating your agreement to the EULA.\n(https://account.mojang.com/documents/minecraft_eula)", "Agree", "Decline");
             if (!agreedPrompt)
             { 
-                Error = "Disagree to the EULA";
+                Error = "Disagreed to the EULA";
                 return null;
             }
 
@@ -171,7 +172,7 @@ namespace WindowsGSM.Plugins
                 }
             }
 
-            // Try getting the latest version and build
+            // Try getting the latest remote build
             var build = await GetRemoteBuild();
             if (string.IsNullOrWhiteSpace(build)) { return null; }
 
@@ -226,17 +227,6 @@ namespace WindowsGSM.Plugins
             {
                 p.Start();
                 p.WaitForExit();
-            }
-            catch (Exception e)
-            {
-                Error = e.Message;
-                return null;
-            }
-
-            // Copy the installed jar to a static filename
-            try
-            {
-                File.Copy(ServerPath.GetServersServerFiles(_serverData.ServerID, $"forge-{build}.jar"), ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath));
             }
             catch (Exception e)
             {
@@ -299,41 +289,32 @@ namespace WindowsGSM.Plugins
         // - Check if the installation is successful
         public bool IsInstallValid()
         {
-            // Check forge.jar exists
-            return File.Exists(ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath));
+            return HasForgeFile(ServerPath.GetServersServerFiles(_serverData.ServerID));
         }
 
 
         // - Check if the directory contains forge.jar for import
         public bool IsImportValid(string path)
         {
-            // @todo(dw): dont require users to rename forge-{MC Version}-{Forge Version}.jar to forge.jar
-            // Check forge.jar exists
-            var exePath = Path.Combine(path, StartPath);
-            Error = $"Invalid Path! Fail to find {StartPath}";
-            return File.Exists(exePath);
+            return HasForgeFile(path);
         }
 
 
         // - Get Local server version
         public string GetLocalBuild()
         {
-            // Get local version and build by version_history.json
-            const string VERSION_JSON_FILE = "version_history.json";
-            var versionJsonFile = ServerPath.GetServersServerFiles(_serverData.ServerID, VERSION_JSON_FILE);
-            if (!File.Exists(versionJsonFile))
+            var jarFile = GetForgeFilename(ServerPath.GetServersServerFiles(_serverData.ServerID));
+            if (string.IsNullOrWhiteSpace(jarFile))
             {
-                Error = $"{VERSION_JSON_FILE} does not exist";
+                Error = "Local forge jar does not exist";
                 return string.Empty;
             }
+            
+            var match = new Regex(@"forge-?([\d\.]+)-([\d\.]+)\.jar").Match(jarFile);
+            var version = match.Groups[1].Value;
+            var build = match.Groups[2].Value;
 
-            var json = File.ReadAllText(versionJsonFile);
-            var text = JObject.Parse(json)["currentVersion"].ToString(); // "git-Paper-131 (MC: 1.16.1)"
-            var match = new Regex(@"git-Paper-(\d{1,}) \(MC: (.{1,})\)").Match(text);
-            var build = match.Groups[1].Value; // "131"
-            var version = match.Groups[2].Value; // "1.16.1"
-
-            return $"{version}/{build}";
+            return $"{version}-{build}";
         }
 
 
@@ -365,6 +346,36 @@ namespace WindowsGSM.Plugins
             catch
             {
                 Error = "Failed to get remote version and build";
+                return string.Empty;
+            }
+        }
+
+        private bool HasForgeFile(string dirName)
+        {
+            return !string.IsNullOrWhiteSpace(GetForgeFilename(dirName));
+        } 
+
+        // Find the local forge-{mc version}-{forge version}.jar filename
+        private string GetForgeFilename(string dirName)
+        {
+            try
+            {
+                var jarFiles = Directory.EnumerateFiles(dirName, "*forge*.jar");
+
+                // @todo(dw): handle multiple forge jars, currently we just return the first one we find
+                foreach (string currentFile in jarFiles)
+                {
+                    string fileName = Path.GetFileName(currentFile);
+                    if (fileName.Contains("installer")) continue;
+                    return fileName;
+                }
+                
+                // didnt find anything that looked like a forge jar
+                return string.Empty;
+            }
+            catch (Exception e)
+            {
+                Error = e.Message;
                 return string.Empty;
             }
         }
