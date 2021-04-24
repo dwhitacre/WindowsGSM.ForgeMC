@@ -19,7 +19,7 @@ namespace WindowsGSM.Plugins
             name = "WindowsGSM.ForgeMC",
             author = "dwhitacre",
             description = "🧩 WindowsGSM plugin for supporting Minecraft: Forge Server",
-            version = "0.4",
+            version = "1.0",
             url = "https://github.com/dwhitacre/WindowsGSM.ForgeMC",
             color = "#ffffff"
         };
@@ -113,8 +113,15 @@ namespace WindowsGSM.Plugins
             }
         }
 
+        // - Get the local installer filename
+        private string GetInstaller()
+        {
+            var localBuild = GetLocalBuild();
+            return $"forge-{localBuild}-installer.jar";
+        }
+
         // - Download the latest remote installer and return its filename
-        private async Task<string> GetInstaller()
+        private async Task<string> GetRemoteInstaller()
         {
             // Try getting the latest remote build
             var build = await GetRemoteBuild();
@@ -140,6 +147,33 @@ namespace WindowsGSM.Plugins
             }
 
             return installer;
+        }
+
+        // - Get and run the latest remote installer
+        private async Task<bool> RunInstaller()
+        {
+            // Try getting the latest remote installer
+            var installer = await GetRemoteInstaller();
+            if (string.IsNullOrWhiteSpace(installer)) { return false; }
+
+            // Prepare process
+            // @todo(dw): configure this to log to install log rather than opening a separate window
+            var param = new StringBuilder($"-jar {installer} --installServer");
+            var p = GetJavaProcess(param.ToString());
+
+            // Start install process
+            try
+            {
+                p.Start();
+                p.WaitForExit();
+            }
+            catch (Exception e)
+            {
+                Error = e.Message;
+                return false;
+            }
+
+            return true;
         }
 
         // - Create a default cfg for the game server after installation
@@ -249,79 +283,49 @@ namespace WindowsGSM.Plugins
                 }
             }
 
-            // Try getting the latest remote installer
-            var installer = await GetInstaller();
-            if (string.IsNullOrWhiteSpace(installer)) { return null; }
-
             // Create eula.txt
             var eulaFile = ServerPath.GetServersServerFiles(_serverData.ServerID, Eula);
             File.WriteAllText(eulaFile, EULA_TEXT);
 
-            // Prepare process
-            // @todo(dw): configure this to log to install log rather than opening a separate window
-            var param = new StringBuilder($"-jar {installer} --installServer");
-            var p = GetJavaProcess(param.ToString());
-
-            // Start install process
-            try
-            {
-                p.Start();
-                p.WaitForExit();
-            }
-            catch (Exception e)
-            {
-                Error = e.Message;
-                return null;
-            }
-
-            // We're installed!
+            // Run installer
+            await RunInstaller();
             return null;
         }
 
         // - Update server function
         public async Task<Process> Update()
         {
-            // Delete the old forge and forge installer
-            var forgeJar = ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath);
-            if (File.Exists(forgeJar))
+            if (!JavaHelper.IsJREInstalled())
             {
-                if (await Task.Run(() =>
-                {
-                    try
-                    {
-                        File.Delete(forgeJar);
-                        return true;
-                    }
-                    catch (Exception e)
-                    {
-                        Error = e.Message;
-                        return false;
-                    }
-                }))
-                {
-                    return null;
-                }
+                Error = ERROR_JAVA_NOT_INSTALLED;
+                return null;
             }
 
-            // Try getting the latest version and build
-            var build = await GetRemoteBuild(); // "1.16.1/133"
-            if (string.IsNullOrWhiteSpace(build)) { return null; }
+            // Try to get old jar file and installer to delete later
+            var oldJar = GetForgeFile(ServerPath.GetServersServerFiles(_serverData.ServerID));
+            var oldJarFile = ServerPath.GetServersServerFiles(_serverData.ServerID, oldJar);
+            var oldInstaller = GetInstaller();
+            var oldInstallerFile = ServerPath.GetServersServerFiles(_serverData.ServerID, oldInstaller);
 
-            // Download the latest forge.jar to /serverfiles
+            // Get and run new installer
+            var success = await RunInstaller();
+            if (!success) { return null; }
+
+            // Delete old forge jar and installer if they existed
             try
             {
-                using (var webClient = new WebClient())
+                if (!string.IsNullOrWhiteSpace(oldJar))
                 {
-                    await webClient.DownloadFileTaskAsync(
-                        $"https://papermc.io/api/v1/paper/{build}/download",
-                        ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath)
-                    );
+                    File.Delete(oldJarFile);
+                }
+                if (File.Exists(oldInstallerFile))
+                {
+                    File.Delete(oldInstallerFile);
                 }
             }
             catch (Exception e)
             {
                 Error = e.Message;
-                return null;
             }
 
             return null;
