@@ -16,28 +16,25 @@ namespace WindowsGSM.Plugins
         // - Plugin Details
         public Plugin Plugin = new Plugin
         {
-            name = "WindowsGSM.ForgeMC", // WindowsGSM.XXXX
+            name = "WindowsGSM.ForgeMC",
             author = "dwhitacre",
             description = "🧩 WindowsGSM plugin for supporting Minecraft: Forge Server",
-            version = "0.3",
-            url = "https://github.com/dwhitacre/WindowsGSM.ForgeMC", // Github repository link (Best practice)
-            color = "#ffffff" // Color Hex
+            version = "0.4",
+            url = "https://github.com/dwhitacre/WindowsGSM.ForgeMC",
+            color = "#ffffff"
         };
-
 
         // - Standard Constructor and properties
         public ForgeMC(ServerConfig serverData) => _serverData = serverData;
         private readonly ServerConfig _serverData;
         public string Error, Notice;
 
-
         // - Game server Fixed variables
-        public string StartPath => "forge.jar"; // Game server start path
+        public string StartPath => "forge.jar"; // todo(dw): unused, remove if possible
         public string FullName = "Minecraft: Forge Server"; // Game server FullName
         public bool AllowsEmbedConsole = true;  // Does this server support output redirect?
         public int PortIncrements = 1; // This tells WindowsGSM how many ports should skip after installation
         public object QueryMethod = new UT3(); // Query method should be use on current server type. Accepted value: null or new A2S() or new FIVEM() or new UT3()
-
 
         // - Game server default values
         public string Port = "25565"; // Default port
@@ -46,6 +43,104 @@ namespace WindowsGSM.Plugins
         public string Maxplayers = "20"; // Default maxplayers
         public string Additional = ""; // Additional server start parameter
 
+        // - Additional configuration
+        private string ForgeBuildStream = "latest"; // latest or recommended build stream
+        private string ForgeFormat = "*forge*.jar"; // Filename wildcard for searching for forge jars
+        private string ForgeRegex = @"forge-?([\d\.]+)-([\d\.]+)\.jar"; // Regex for finding forge version and build, version group 1 / build group 2
+        private string ForgeInstallerUniqueKey = "installer"; // Filenames containing this to exclude in forge jar search
+        private string ForgeHost = "http://files.minecraftforge.net"; // Host where forge files and meta exist
+        private string ForgeInstallerBasePath = "/maven/net/minecraftforge/forge"; // Base path of the url for forge installers
+        private string ForgePromotionsJson = "/net/minecraftforge/forge/promotions_slim.json"; // Path to promotions json in forge (contains mapping of minecraft version to forge build)
+        private string ServerProperties = "server.properties"; // Filename for Minecraft server properties
+        private string Eula = "eula.txt";
+        private string PaperVersionApi = "https://papermc.io/api/v1/paper"; // Paper minecraft versions API
+
+        // - Constants
+        private const string ERROR_JAVA_NOT_INSTALLED = "Java is not installed";
+        private const string ERROR_EULA_DECLINED = "Declined the EULA";
+        private const string ERROR_LOCAL_FORGE_MISSING = "Local forge jar does not exist";
+        private const string EULA_HEADER = "Agreement to the EULA";
+        private const string EULA_PROMPT = "By continuing you are indicating your agreement to the EULA.\n(https://account.mojang.com/documents/minecraft_eula)";
+        private const string EULA_TEXT = "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://account.mojang.com/documents/minecraft_eula).\neula=true";
+        private const string AGREE = "Agree";
+        private const string DECLINE = "Decline";
+
+        // - Get a prepared java process with args
+        private Process GetJavaProcess(string args)
+        {
+            var javaPath = JavaHelper.FindJavaExecutableAbsolutePath();
+            return new Process
+            {
+                StartInfo =
+                {
+                    WorkingDirectory = ServerPath.GetServersServerFiles(_serverData.ServerID),
+                    FileName = javaPath,
+                    Arguments = args,
+                    WindowStyle = ProcessWindowStyle.Minimized,
+                    UseShellExecute = false
+                },
+                EnableRaisingEvents = true
+            };
+        }
+
+        // - Has a local forge jar file
+        private bool HasForgeFile(string dirName)
+        {
+            return !string.IsNullOrWhiteSpace(GetForgeFile(dirName));
+        } 
+
+        // - Find the local forge jar filename
+        private string GetForgeFile(string dirName)
+        {
+            try
+            {
+                // @todo(dw): handle multiple forge jars, currently we just return the first one we find
+                var jarFiles = Directory.EnumerateFiles(dirName, ForgeFormat);
+                foreach (string currentFile in jarFiles)
+                {
+                    string fileName = Path.GetFileName(currentFile);
+                    if (fileName.Contains(ForgeInstallerUniqueKey)) continue;
+                    return fileName;
+                }
+                
+                // didnt find anything that looked like a forge jar
+                return string.Empty;
+            }
+            catch (Exception e)
+            {
+                Error = e.Message;
+                return string.Empty;
+            }
+        }
+
+        // - Download the latest remote installer and return its filename
+        private async Task<string> GetInstaller()
+        {
+            // Try getting the latest remote build
+            var build = await GetRemoteBuild();
+            if (string.IsNullOrWhiteSpace(build)) { return string.Empty; }
+
+            // Download the latest forge installer to /serverfiles
+            var installer = $"forge-{build}-installer.jar";
+            var installerFile = ServerPath.GetServersServerFiles(_serverData.ServerID, installer);
+            try
+            {
+                using (var webClient = new WebClient())
+                {
+                    await webClient.DownloadFileTaskAsync(
+                        $"{ForgeHost}{ForgeInstallerBasePath}/{build}/{installer}",
+                        installerFile
+                    );
+                }
+            }
+            catch (Exception e)
+            {
+                Error = e.Message;
+                return string.Empty;
+            }
+
+            return installer;
+        }
 
         // - Create a default cfg for the game server after installation
         public async void CreateServerCFG()
@@ -55,40 +150,24 @@ namespace WindowsGSM.Plugins
             sb.AppendLine($"server-port={_serverData.ServerPort}");
             sb.AppendLine("enable-query=true");
             sb.AppendLine($"query.port={_serverData.ServerQueryPort}");
-            sb.AppendLine($"rcon.port={int.Parse(_serverData.ServerPort) + 10}");
+            sb.AppendLine($"rcon.port={int.Parse(_serverData.ServerPort) + 10}"); // @todo(dw): this seems like it should be 1 and then PortIncrements should be 2
             sb.AppendLine($"rcon.password={ _serverData.GetRCONPassword()}");
-            File.WriteAllText(ServerPath.GetServersServerFiles(_serverData.ServerID, "server.properties"), sb.ToString());
+            File.WriteAllText(ServerPath.GetServersServerFiles(_serverData.ServerID, ServerProperties), sb.ToString());
         }
-
 
         // - Start server function, return its Process to WindowsGSM
         public async Task<Process> Start()
         {
-            // Check Java exists
-            var javaPath = JavaHelper.FindJavaExecutableAbsolutePath();
-            if (javaPath.Length == 0)
+            if (!JavaHelper.IsJREInstalled())
             {
-                Error = "Java is not installed";
+                Error = ERROR_JAVA_NOT_INSTALLED;
                 return null;
             }
 
-            // Prepare start parameter
-            var jarFile = GetForgeFilename(ServerPath.GetServersServerFiles(_serverData.ServerID));
+            // Prepare process
+            var jarFile = GetForgeFile(ServerPath.GetServersServerFiles(_serverData.ServerID));
             var param = new StringBuilder($"{_serverData.ServerParam} -jar {jarFile} nogui");
-
-            // Prepare Process
-            var p = new Process
-            {
-                StartInfo =
-                {
-                    WorkingDirectory = ServerPath.GetServersServerFiles(_serverData.ServerID),
-                    FileName = javaPath,
-                    Arguments = param.ToString(),
-                    WindowStyle = ProcessWindowStyle.Minimized,
-                    UseShellExecute = false
-                },
-                EnableRaisingEvents = true
-            };
+            var p = GetJavaProcess(param.ToString());
 
             // Set up Redirect Input and Output to WindowsGSM Console if EmbedConsole is on
             if (AllowsEmbedConsole)
@@ -109,7 +188,7 @@ namespace WindowsGSM.Plugins
                 catch (Exception e)
                 {
                     Error = e.Message;
-                    return null; // return null if fail to start
+                    return null;
                 }
 
                 p.BeginOutputReadLine();
@@ -126,10 +205,9 @@ namespace WindowsGSM.Plugins
             catch (Exception e)
             {
                 Error = e.Message;
-                return null; // return null if fail to start
+                return null;
             }
         }
-
 
         // - Stop server function
         public async Task Stop(Process p)
@@ -149,15 +227,14 @@ namespace WindowsGSM.Plugins
             });
         }
 
-
         // - Install server function
         public async Task<Process> Install()
         {
             // EULA agreement
-            var agreedPrompt = await UI.CreateYesNoPromptV1("Agreement to the EULA", "By continuing you are indicating your agreement to the EULA.\n(https://account.mojang.com/documents/minecraft_eula)", "Agree", "Decline");
+            var agreedPrompt = await UI.CreateYesNoPromptV1(EULA_HEADER, EULA_PROMPT, AGREE, DECLINE);
             if (!agreedPrompt)
             { 
-                Error = "Disagreed to the EULA";
+                Error = ERROR_EULA_DECLINED;
                 return null;
             }
 
@@ -172,55 +249,18 @@ namespace WindowsGSM.Plugins
                 }
             }
 
-            // Try getting the latest remote build
-            var build = await GetRemoteBuild();
-            if (string.IsNullOrWhiteSpace(build)) { return null; }
-
-            // Download the latest forge installer to /serverfiles
-            var installer = $"forge-{build}-installer.jar";
-            var installerFile = ServerPath.GetServersServerFiles(_serverData.ServerID, installer);
-            try
-            {
-                using (var webClient = new WebClient())
-                {
-                    await webClient.DownloadFileTaskAsync($"http://files.minecraftforge.net/maven/net/minecraftforge/forge/{build}/{installer}", installerFile);
-                }
-            }
-            catch (Exception e)
-            {
-                Error = e.Message;
-                return null;
-            }
+            // Try getting the latest remote installer
+            var installer = await GetInstaller();
+            if (string.IsNullOrWhiteSpace(installer)) { return null; }
 
             // Create eula.txt
-            var eulaFile = ServerPath.GetServersServerFiles(_serverData.ServerID, "eula.txt");
-            File.WriteAllText(eulaFile, "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://account.mojang.com/documents/minecraft_eula).\neula=true");
+            var eulaFile = ServerPath.GetServersServerFiles(_serverData.ServerID, Eula);
+            File.WriteAllText(eulaFile, EULA_TEXT);
 
-            // Prepare install parameter
+            // Prepare process
+            // @todo(dw): configure this to log to install log rather than opening a separate window
             var param = new StringBuilder($"-jar {installer} --installServer");
-
-            // Get java, this should always be installed
-            var javaPath = JavaHelper.FindJavaExecutableAbsolutePath();
-            if (javaPath.Length == 0)
-            {
-                Error = "Java is not installed";
-                return null;
-            }
-
-            // Prepare install process
-            // @todo(dw): configure this to log to install log rather than opening a separate window??
-            var p = new Process
-            {
-                StartInfo =
-                {
-                    WorkingDirectory = ServerPath.GetServersServerFiles(_serverData.ServerID),
-                    FileName = javaPath,
-                    Arguments = param.ToString(),
-                    WindowStyle = ProcessWindowStyle.Minimized,
-                    UseShellExecute = false
-                },
-                EnableRaisingEvents = true
-            };
+            var p = GetJavaProcess(param.ToString());
 
             // Start install process
             try
@@ -234,15 +274,14 @@ namespace WindowsGSM.Plugins
                 return null;
             }
 
-            // We should be installed now!
+            // We're installed!
             return null;
         }
-
 
         // - Update server function
         public async Task<Process> Update()
         {
-            // Delete the old forge.jar
+            // Delete the old forge and forge installer
             var forgeJar = ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath);
             if (File.Exists(forgeJar))
             {
@@ -273,7 +312,10 @@ namespace WindowsGSM.Plugins
             {
                 using (var webClient = new WebClient())
                 {
-                    await webClient.DownloadFileTaskAsync($"https://papermc.io/api/v1/paper/{build}/download", ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath));
+                    await webClient.DownloadFileTaskAsync(
+                        $"https://papermc.io/api/v1/paper/{build}/download",
+                        ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath)
+                    );
                 }
             }
             catch (Exception e)
@@ -285,40 +327,36 @@ namespace WindowsGSM.Plugins
             return null;
         }
 
-
         // - Check if the installation is successful
         public bool IsInstallValid()
         {
             return HasForgeFile(ServerPath.GetServersServerFiles(_serverData.ServerID));
         }
 
-
-        // - Check if the directory contains forge.jar for import
+        // - Check if the directory contains forge jar for import
         public bool IsImportValid(string path)
         {
             return HasForgeFile(path);
         }
 
-
-        // - Get Local server version
+        // - Get Local server version and build
         public string GetLocalBuild()
         {
-            var jarFile = GetForgeFilename(ServerPath.GetServersServerFiles(_serverData.ServerID));
+            var jarFile = GetForgeFile(ServerPath.GetServersServerFiles(_serverData.ServerID));
             if (string.IsNullOrWhiteSpace(jarFile))
             {
-                Error = "Local forge jar does not exist";
+                Error = ERROR_LOCAL_FORGE_MISSING;
                 return string.Empty;
             }
             
-            var match = new Regex(@"forge-?([\d\.]+)-([\d\.]+)\.jar").Match(jarFile);
+            var match = new Regex(ForgeRegex).Match(jarFile);
             var version = match.Groups[1].Value;
             var build = match.Groups[2].Value;
 
             return $"{version}-{build}";
         }
 
-
-        // - Get Latest server version
+        // - Get Latest server version and build
         public async Task<string> GetRemoteBuild()
         {
             // @todo(dw): its likely we will not always want the latest
@@ -335,43 +373,17 @@ namespace WindowsGSM.Plugins
                     // @todo(dw): dont get minecraft versions from Paper's API.
                     // this probably is the latest version of MC Paper supports
                     // which is not equal to latest version of MC Forge supports
-                    var version = JObject.Parse(await webClient.DownloadStringTaskAsync("https://papermc.io/api/v1/paper"))["versions"][0].ToString();
+                    var version = JObject.Parse(
+                        await webClient.DownloadStringTaskAsync(PaperVersionApi)
+                    )["versions"][0].ToString();
                     
                     // @todo(dw): need to allow choice between 'latest' stream and 'recommended' stream
-                    var build = JObject.Parse(await webClient.DownloadStringTaskAsync("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"))["promos"][$"{version}-latest"].ToString();
+                    var build = JObject.Parse(
+                        await webClient.DownloadStringTaskAsync($"{ForgeHost}{ForgePromotionsJson}")
+                    )["promos"][$"{version}-{ForgeBuildStream}"].ToString();
 
                     return $"{version}-{build}";
                 }
-            }
-            catch
-            {
-                Error = "Failed to get remote version and build";
-                return string.Empty;
-            }
-        }
-
-        private bool HasForgeFile(string dirName)
-        {
-            return !string.IsNullOrWhiteSpace(GetForgeFilename(dirName));
-        } 
-
-        // Find the local forge-{mc version}-{forge version}.jar filename
-        private string GetForgeFilename(string dirName)
-        {
-            try
-            {
-                var jarFiles = Directory.EnumerateFiles(dirName, "*forge*.jar");
-
-                // @todo(dw): handle multiple forge jars, currently we just return the first one we find
-                foreach (string currentFile in jarFiles)
-                {
-                    string fileName = Path.GetFileName(currentFile);
-                    if (fileName.Contains("installer")) continue;
-                    return fileName;
-                }
-                
-                // didnt find anything that looked like a forge jar
-                return string.Empty;
             }
             catch (Exception e)
             {
